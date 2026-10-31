@@ -25,7 +25,7 @@ select{flex:none;border:1px solid var(--bd);background:var(--sf);color:var(--tx)
 .pg{position:relative;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:100%}
 .pg canvas{position:absolute;inset:0;width:100%;height:100%}
 .pg svg{position:absolute;inset:0;width:100%;height:100%;touch-action:pan-y pinch-zoom}
-body[data-tool=pen] svg,body[data-tool=hl] svg,body[data-tool=rect] svg,body[data-tool=white] svg{touch-action:none}
+body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[data-tool=rect] svg,body[data-tool=white] svg{touch-action:none}
 [data-id]{touch-action:none;cursor:move}
 .sel{filter:drop-shadow(0 0 2px #2563eb) drop-shadow(0 0 2px #2563eb)}
 #empty{margin:12vh auto;max-width:360px;text-align:center;padding:0 20px}
@@ -47,6 +47,8 @@ body[data-tool=pen] svg,body[data-tool=hl] svg,body[data-tool=rect] svg,body[dat
  </div>
  <div class="row" id="tools">
   <button class="b on" data-t="select">Sélection</button>
+  <button class="b" data-t="edit">Modifier le texte</button>
+  <button class="b" data-t="zone">Remplacer une zone</button>
   <button class="b" data-t="text">Texte</button>
   <button class="b" data-t="hl">Surligner</button>
   <button class="b" data-t="pen">Dessiner</button>
@@ -81,7 +83,7 @@ body[data-tool=pen] svg,body[data-tool=hl] svg,body[data-tool=rect] svg,body[dat
 const NS='http://www.w3.org/2000/svg',$=s=>document.querySelector(s);
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const {PDFDocument,StandardFonts,rgb,degrees}=PDFLib;
-let bytes=null,pdf=null,zoom=1,tool='select',color='#e11d48',size=16,ann=[],uid=0,sel=null,fname='document.pdf',sizes=[],ovs=[],cur=0,tok=0,pend=null;
+let bytes=null,pdf=null,zoom=1,tool='select',color='#e11d48',size=16,ann=[],uid=0,sel=null,fname='document.pdf',sizes=[],ovs=[],cur=0,tok=0,pend=null,tx=[];
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('s');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('s'),2600)}
 function hex(h){const n=parseInt(h.slice(1),16);return rgb((n>>16&255)/255,(n>>8&255)/255,(n&255)/255)}
@@ -95,7 +97,44 @@ function svgFor(a){
  const p=a.pts.map(q=>q.join(',')).join(' ');
  return `<polyline points="${p}" fill="none" stroke="${a.color}" stroke-width="${a.sw}" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/><polyline ${d} points="${p}" fill="none" stroke="transparent" stroke-width="14"/>`;
 }
-function draw(i){if(ovs[i])ovs[i].innerHTML=ann.filter(a=>a.p===i).map(svgFor).join('')}
+function draw(i){if(!ovs[i])return;
+ const hits=tool==='edit'?(tx[i]||[]).map((o,k)=>o.done?'':`<rect data-k="${k}" x="${o.x-1}" y="${o.b-o.s*.95}" width="${o.w+2}" height="${o.s*1.25}" fill="rgba(37,99,235,.14)" stroke="rgba(37,99,235,.5)" stroke-width=".5" style="cursor:text"/>`).join(''):'';
+ ovs[i].innerHTML=ann.filter(a=>a.p===i).map(svgFor).join('')+hits}
+async function runs(pg,v){
+ const tc=await pg.getTextContent(),r=[];
+ for(const it of tc.items){
+  if(it.str===undefined)continue;
+  const m=pdfjsLib.Util.transform(v.transform,it.transform),s=Math.hypot(m[2],m[3]),p=r[r.length-1];
+  const gap=p?m[4]-(p.x+p.w):0;
+  if(p&&Math.abs(p.b-m[5])<s*.3&&gap<s*.8&&gap>-s*.5){p.str+=(gap>s*.15&&!/\s$/.test(p.str)&&!/^\s/.test(it.str)?' ':'')+it.str;p.w=Math.max(p.w,m[4]+it.width-p.x)}
+  else r.push({str:it.str,x:m[4],b:m[5],s,w:it.width});
+ }
+ return r.filter(o=>o.str.trim()&&o.s>1);
+}
+function zoneEdit(i,a){
+ const gid=++uid,sz=Math.max(6,Math.min(a.h*.75,40));
+ ann.push({id:++uid,p:i,t:'white',x:a.x,y:a.y,w:a.w,h:a.h,color:'#fff',g:gid});drawAll();
+ const r=ovs[i].getBoundingClientRect(),k=r.width/sizes[i].w,t=document.createElement('textarea');
+ t.className='ti';t.placeholder='Nouveau texte';
+ t.style.cssText=`left:${r.left+a.x*k}px;top:${r.top+a.y*k}px;font-size:${sz*k}px;color:#000;min-width:${Math.max(a.w*k,120)}px;height:${Math.max(a.h*k,34)}px`;
+ document.body.append(t);t.focus();let done=0;
+ const fin=()=>{if(done)return;done=1;const v=t.value;t.remove();
+  if(v.trim())ann.push({id:++uid,p:i,t:'text',x:a.x+1,y:a.y+(a.h-sz)/2,text:v,size:sz,color:'#000000',g:gid});drawAll()};
+ t.onblur=fin;t.onkeydown=e=>{if(e.key==='Escape'){t.value='';fin()}};
+}
+function editRun(i,o){
+ const r=ovs[i].getBoundingClientRect(),k=r.width/sizes[i].w,t=document.createElement('textarea'),y=o.b-o.s*.8;
+ t.className='ti';t.value=o.str;
+ t.style.cssText=`left:${r.left+o.x*k}px;top:${r.top+y*k}px;font-size:${o.s*k}px;color:#000;min-width:${o.w*k+30}px`;
+ document.body.append(t);t.focus();t.select();let done=0;
+ const fin=()=>{if(done)return;done=1;const v=t.value;t.remove();
+  if(v!==o.str){const g=++uid;
+   ann.push({id:++uid,p:i,t:'white',x:o.x-1,y:o.b-o.s*.95,w:o.w+2,h:o.s*1.25,color:'#fff',g,o});
+   if(v.trim())ann.push({id:++uid,p:i,t:'text',x:o.x,y,text:v,size:o.s,color:'#000000',g});
+   o.done=true}
+  drawAll()};
+ t.onblur=fin;t.onkeydown=e=>{if(e.key==='Escape'){t.value=o.str;fin()}};
+}
 function drawAll(){ovs.forEach((_,i)=>draw(i));bar();$('#undo').disabled=!ann.length}
 function bar(){const a=ann.find(x=>x.id===sel);$('#sb').hidden=!a;if(a)$('#edt').style.display=$('#am').style.display=$('#ap').style.display=a.t==='text'?'':'none'}
 const mv=(a,dx,dy)=>{if(a.pts)a.pts=a.pts.map(q=>[q[0]+dx,q[1]+dy]);else{a.x+=dx;a.y+=dy}};
@@ -115,7 +154,8 @@ function bind(o,i){
  o.onpointerdown=e=>{
   const q=pt(e,i);
   if(tool==='select'){const el=e.target.closest('[data-id]'),a=el&&ann.find(x=>x.id==el.dataset.id);sel=a?a.id:null;drawAll();if(a){g={a,q};o.setPointerCapture(e.pointerId)}return}
-  if(tool==='hl'||tool==='rect'||tool==='white'){const a={id:++uid,p:i,t:tool,x:q.x,y:q.y,w:0,h:0,color:tool==='white'?'#fff':color,sw:Math.max(1.5,size/8)};ann.push(a);g={a,q,s:1};o.setPointerCapture(e.pointerId)}
+  if(tool==='zone'){const a={id:++uid,p:i,t:'rect',x:q.x,y:q.y,w:0,h:0,color:'#2563eb',sw:.8};ann.push(a);g={a,q,s:1,z:1};o.setPointerCapture(e.pointerId)}
+  else if(tool==='hl'||tool==='rect'||tool==='white'){const a={id:++uid,p:i,t:tool,x:q.x,y:q.y,w:0,h:0,color:tool==='white'?'#fff':color,sw:Math.max(1.5,size/8)};ann.push(a);g={a,q,s:1};o.setPointerCapture(e.pointerId)}
   else if(tool==='pen'){const a={id:++uid,p:i,t:'pen',pts:[[q.x,q.y]],color,sw:Math.max(1.5,size/8)};ann.push(a);g={a,q,pen:1};o.setPointerCapture(e.pointerId)}
  };
  o.onpointermove=e=>{if(!g)return;const q=pt(e,i);
@@ -123,9 +163,10 @@ function bind(o,i){
   else if(g.s){const a=g.a;a.x=Math.min(g.q.x,q.x);a.y=Math.min(g.q.y,q.y);a.w=Math.abs(q.x-g.q.x);a.h=Math.abs(q.y-g.q.y)}
   else{mv(g.a,q.x-g.q.x,q.y-g.q.y);g.q=q}
   draw(i)};
- o.onpointerup=o.onpointercancel=()=>{if(g&&g.s&&g.a.w<3&&g.a.h<3)ann=ann.filter(x=>x!==g.a);const had=g;g=null;if(had)drawAll()};
+ o.onpointerup=o.onpointercancel=()=>{if(g&&g.s&&g.a.w<3&&g.a.h<3)ann=ann.filter(x=>x!==g.a);const had=g;g=null;if(had&&had.z){ann=ann.filter(x=>x!==had.a);if(had.a.w>=6&&had.a.h>=6)zoneEdit(i,had.a)}if(had)drawAll()};
  o.onclick=e=>{
   const q=pt(e,i),el=e.target.closest('[data-id]'),a=el&&ann.find(x=>x.id==el.dataset.id);
+  if(tool==='edit'){const k=e.target.closest('[data-k]');if(k)editRun(i,tx[i][+k.dataset.k]);return}
   if(tool==='text'){setTimeout(()=>a&&a.t==='text'?askText(i,a.x,a.y,a):askText(i,q.x,q.y),0)}
   else if(tool==='img'){if(!pend){$('#f3').click();return}
    const w=Math.min(sizes[i].w*.4,pend.w),h=w*pend.h/pend.w;
@@ -137,7 +178,7 @@ async function load(){
  const t=++tok;
  try{pdf=await pdfjsLib.getDocument({data:bytes.slice()}).promise}catch(e){toast('Impossible de lire ce PDF (protégé ou corrompu).');return}
  $('#empty').style.display='none';$('#save').disabled=false;
- const host=$('#pages');host.innerHTML='';sizes=[];ovs=[];
+ const host=$('#pages');host.innerHTML='';sizes=[];ovs=[];tx=[];
  const W=host.clientWidth-16,dpr=Math.min(devicePixelRatio||1,2);
  for(let i=0;i<pdf.numPages;i++){
   const pg=await pdf.getPage(i+1);if(t!==tok)return;
@@ -145,7 +186,7 @@ async function load(){
   const w=document.createElement('div');w.className='pg';w.style.width=v.width*sc+'px';w.style.height=v.height*sc+'px';
   const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
   const o=document.createElementNS(NS,'svg');o.setAttribute('viewBox',`0 0 ${v.width} ${v.height}`);
-  w.append(c,o);host.append(w);sizes[i]={w:v.width,h:v.height};ovs[i]=o;bind(o,i);draw(i);
+  tx[i]=await runs(pg,v);w.append(c,o);host.append(w);sizes[i]={w:v.width,h:v.height};ovs[i]=o;bind(o,i);draw(i);
   await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
  }
  drawAll();scrolled();
@@ -182,7 +223,7 @@ document.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>{const k=b.datase
 document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{
  tool=b.dataset.t;document.body.dataset.tool=tool;
  document.querySelectorAll('[data-t]').forEach(x=>x.classList.toggle('on',x===b));
- if(tool==='img'){pend=null;$('#f3').click()}if(tool!=='select'){sel=null;drawAll()}
+ if(tool==='img'){pend=null;$('#f3').click()}sel=null;drawAll();
 });
 $('#col').oninput=e=>{color=e.target.value;const a=ann.find(x=>x.id===sel);if(a&&a.t!=='white'){a.color=color;drawAll()}};
 $('#sz').onchange=e=>size=+e.target.value;
@@ -193,7 +234,7 @@ $('#f2').onchange=async e=>{const f=e.target.files[0];if(!f)return;const ob=awai
 $('#f3').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image(),u=URL.createObjectURL(f);
  im.onload=()=>{const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;c.getContext('2d').drawImage(im,0,0);pend={url:c.toDataURL('image/png'),w:im.naturalWidth,h:im.naturalHeight};URL.revokeObjectURL(u);toast('Touchez la page pour placer l’image.')};
  im.src=u;e.target.value=''};
-$('#undo').onclick=()=>{ann.pop();sel=null;drawAll()};
+$('#undo').onclick=()=>{const a=ann.pop();if(a&&a.g)ann=ann.filter(z=>{if(z.g===a.g){if(z.o)z.o.done=false;return false}return true});sel=null;drawAll()};
 $('#zi').onclick=()=>{zoom=Math.min(zoom*1.25,4);bytes&&load()};
 $('#zo').onclick=()=>{zoom=Math.max(zoom/1.25,.5);bytes&&load()};
 $('#rm').onclick=()=>{ann=ann.filter(a=>a.id!==sel);sel=null;drawAll()};
