@@ -33,6 +33,7 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
 #sb{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:6px;display:flex;gap:6px;box-shadow:0 4px 16px rgba(0,0,0,.3);z-index:9}
 #sb[hidden]{display:none}
 .ti{position:fixed;z-index:20;min-width:140px;min-height:40px;font-family:Helvetica,Arial,sans-serif;background:rgba(255,255,255,.92);border:1.5px dashed var(--ac);outline:none;padding:0;resize:both;line-height:1.2}
+#sg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;display:flex;align-items:center;justify-content:center}#sg[hidden]{display:none}#sg .card{background:var(--sf);border-radius:14px;padding:12px;width:min(92vw,420px);display:flex;flex-direction:column;gap:8px}#sgc{width:100%;aspect-ratio:5/2;background:#fff;border:1px dashed var(--bd);border-radius:8px;touch-action:none}.r2{display:flex;gap:6px;flex-wrap:wrap}
 #toast{position:fixed;left:50%;top:calc(110px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#111;color:#fff;padding:9px 14px;border-radius:10px;z-index:30;max-width:90%;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.s{opacity:1}
 </style></head>
@@ -48,6 +49,7 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
  <div class="row" id="tools">
   <button class="b on" data-t="select">Sélection</button>
   <button class="b" id="ocr">Lire le texte (OCR)</button>
+  <button class="b" id="ocra">OCR toutes les pages</button>
   <button class="b" data-t="edit">Modifier le texte</button>
   <button class="b" data-t="zone">Remplacer une zone</button>
   <button class="b" data-t="text">Texte</button>
@@ -56,6 +58,7 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
   <button class="b" data-t="rect">Cadre</button>
   <button class="b" data-t="white">Masquer</button>
   <button class="b" data-t="img">Image</button>
+  <button class="b" id="sgb">Signature</button>
   <span class="sep"></span>
   <input type="color" id="col" value="#e11d48" aria-label="Couleur">
   <select id="sz" aria-label="Taille"><option>12</option><option selected>16</option><option>24</option><option>32</option><option>48</option></select>
@@ -73,6 +76,7 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
 <div id="sb" hidden>
  <button class="b" id="edt">Modifier</button><button class="b" id="am">A−</button><button class="b" id="ap">A+</button><button class="b" id="rm">Supprimer</button>
 </div>
+<div id="sg" hidden><div class="card"><b>Signature</b><canvas id="sgc" width="600" height="240"></canvas><div class="r2"><button class="b" id="sgx">Effacer</button><button class="b p" id="sgs">Enregistrer et utiliser</button><button class="b" id="sgu" hidden>Utiliser l’enregistrée</button><button class="b" id="sgn">Fermer</button></div></div></div>
 <div id="toast"></div>
 <input type="file" id="f1" accept="application/pdf" hidden>
 <input type="file" id="f2" accept="application/pdf" hidden>
@@ -87,7 +91,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
 const {PDFDocument,StandardFonts,rgb,degrees}=PDFLib;
 let bytes=null,pdf=null,zoom=1,tool='select',color='#e11d48',size=16,ann=[],uid=0,sel=null,fname='document.pdf',sizes=[],ovs=[],cur=0,tok=0,pend=null,tx=[],ocrC={},ocrW=null;
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('s');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('s'),2600)}
+function toast(m,ms){const t=$('#toast');t.textContent=m;t.classList.add('s');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('s'),ms||2600)}
 function hex(h){const n=parseInt(h.slice(1),16);return rgb((n>>16&255)/255,(n>>8&255)/255,(n&255)/255)}
 function svgFor(a){
  const d=`data-id="${a.id}"${a.id===sel?' class="sel"':''}`;
@@ -124,15 +128,21 @@ function zoneEdit(i,a){
   if(v.trim())ann.push({id:++uid,p:i,t:'text',x:a.x+1,y:a.y+(a.h-sz)/2,text:v,size:sz,color:'#000000',g:gid});drawAll()};
  t.onblur=fin;t.onkeydown=e=>{if(e.key==='Escape'){t.value='';fin()}};
 }
+function colAt(i,o){
+ try{const c=ovs[i].parentNode.querySelector('canvas'),k=c.width/sizes[i].w,x=Math.max(0,Math.floor(o.x*k)),y=Math.max(0,Math.floor((o.b-o.s*.8)*k)),w=Math.max(1,Math.min(c.width-x,Math.ceil(o.w*k))),h=Math.max(1,Math.min(c.height-y,Math.ceil(o.s*k)));
+  const d=c.getContext('2d').getImageData(x,y,w,h).data;let m=1e9,r=0,g=0,b=0;
+  for(let p=0;p<d.length;p+=4){const l=d[p]*.3+d[p+1]*.59+d[p+2]*.11;if(l<m){m=l;r=d[p];g=d[p+1];b=d[p+2]}}
+  if(m<170)return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('')}catch(e){}
+ return '#000000'}
 function editRun(i,o){
- const r=ovs[i].getBoundingClientRect(),k=r.width/sizes[i].w,t=document.createElement('textarea'),y=o.b-o.s*.8;
+ const r=ovs[i].getBoundingClientRect(),k=r.width/sizes[i].w,t=document.createElement('textarea'),y=o.b-o.s*.8,col=colAt(i,o);
  t.className='ti';t.value=o.str;
- t.style.cssText=`left:${r.left+o.x*k}px;top:${r.top+y*k}px;font-size:${o.s*k}px;color:#000;min-width:${o.w*k+30}px`;
+ t.style.cssText=`left:${r.left+o.x*k}px;top:${r.top+y*k}px;font-size:${o.s*k}px;color:${col};min-width:${o.w*k+30}px`;
  document.body.append(t);t.focus();t.select();let done=0;
  const fin=()=>{if(done)return;done=1;const v=t.value;t.remove();
   if(v!==o.str){const g=++uid;
    ann.push({id:++uid,p:i,t:'white',x:o.x-1,y:o.b-o.s*.95,w:o.w+2,h:o.s*1.25,color:'#fff',g,o});
-   if(v.trim())ann.push({id:++uid,p:i,t:'text',x:o.x,y,text:v,size:o.s,color:'#000000',g});
+   if(v.trim())ann.push({id:++uid,p:i,t:'text',x:o.x,y,text:v,size:o.s,color:col,g});
    o.done=true}
   drawAll()};
  t.onblur=fin;t.onkeydown=e=>{if(e.key==='Escape'){t.value=o.str;fin()}};
@@ -237,25 +247,45 @@ $('#f2').onchange=async e=>{const f=e.target.files[0];if(!f)return;const ob=awai
 $('#f3').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image(),u=URL.createObjectURL(f);
  im.onload=()=>{const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;c.getContext('2d').drawImage(im,0,0);pend={url:c.toDataURL('image/png'),w:im.naturalWidth,h:im.naturalHeight};URL.revokeObjectURL(u);toast('Touchez la page pour placer l’image.')};
  im.src=u;e.target.value=''};
-$('#ocr').onclick=async()=>{
+async function ocrPage(i){
+ const pg=await pdf.getPage(i+1),vp=pg.getViewport({scale:2200/pg.getViewport({scale:1}).width});
+ const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
+ await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+ ocrW=ocrW||await Tesseract.createWorker('fra');
+ const {data}=await ocrW.recognize(c),k=sizes[i].w/c.width,r=[];
+ const add=(w,bl,sz)=>{if(!w.text.trim()||w.confidence<40)return;r.push({str:w.text,x:w.bbox.x0*k,b:bl,s:sz,w:(w.bbox.x1-w.bbox.x0)*k})};
+ if(data.lines&&data.lines.length)for(const l of data.lines){const sz=(l.bbox.y1-l.bbox.y0)*k*.9;for(const w of l.words||[])add(w,l.bbox.y1*k-sz*.2,sz)}
+ else for(const w of data.words||[]){const sz=(w.bbox.y1-w.bbox.y0)*k*.9;add(w,w.bbox.y1*k-sz*.2,sz)}
+ ocrC[i]=tx[i]=r;draw(i);return r.length}
+async function runOcr(all){
  if(!pdf)return toast('Ouvrez d’abord un PDF.');
  if(typeof Tesseract==='undefined')return toast('OCR indisponible : connexion internet requise.');
- const i=cur,b=$('#ocr');b.disabled=true;toast('Lecture de la page '+(i+1)+'… jusqu’à 30 s la première fois.');
- try{
-  const pg=await pdf.getPage(i+1),vp=pg.getViewport({scale:2200/pg.getViewport({scale:1}).width});
-  const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
-  await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
-  ocrW=ocrW||await Tesseract.createWorker('fra');
-  const {data}=await ocrW.recognize(c),k=sizes[i].w/c.width,r=[];
-  const add=(w,bl,sz)=>{if(!w.text.trim()||w.confidence<40)return;r.push({str:w.text,x:w.bbox.x0*k,b:bl,s:sz,w:(w.bbox.x1-w.bbox.x0)*k})};
-  if(data.lines&&data.lines.length)for(const l of data.lines){const sz=(l.bbox.y1-l.bbox.y0)*k*.9;for(const w of l.words||[])add(w,l.bbox.y1*k-sz*.2,sz)}
-  else for(const w of data.words||[]){const sz=(w.bbox.y1-w.bbox.y0)*k*.9;add(w,w.bbox.y1*k-sz*.2,sz)}
-  ocrC[i]=tx[i]=r;
-  toast(r.length?r.length+' mots trouvés. Touchez un mot pour le modifier.':'Aucun texte reconnu sur cette page.');
+ const bs=[$('#ocr'),$('#ocra')];bs.forEach(b=>b.disabled=true);
+ try{let n=0;const list=all?[...Array(pdf.numPages).keys()]:[cur];
+  for(const i of list){if(all&&tx[i]&&tx[i].length&&!ocrC[i])continue;toast(`Lecture de la page ${i+1}/${pdf.numPages}… (jusqu’à 30 s la première fois)`,90000);n+=await ocrPage(i)}
+  toast(n?n+' mots trouvés. Touchez un mot pour le modifier.':'Aucun texte reconnu.');
   document.querySelector('[data-t=edit]').click();
  }catch(e){toast('Échec de la lecture (connexion ?).')}
- b.disabled=false;
-};
+ bs.forEach(b=>b.disabled=false)}
+$('#ocr').onclick=()=>runOcr(0);$('#ocra').onclick=()=>runOcr(1);
+// Signature
+const sgc=$('#sgc'),sx=sgc.getContext('2d');let sdw=false;
+const sgGet=()=>{try{return localStorage.getItem('sig')}catch(e){return null}};
+const sp=e=>{const r=sgc.getBoundingClientRect();return{x:(e.clientX-r.left)*600/r.width,y:(e.clientY-r.top)*240/r.height}};
+function useSig(url){const im=new Image();im.onload=()=>{pend={url,w:120,h:120*im.naturalHeight/im.naturalWidth};tool='img';document.body.dataset.tool='img';document.querySelectorAll('[data-t]').forEach(x=>x.classList.toggle('on',x.dataset.t==='img'));$('#sg').hidden=true;toast('Touchez la page pour placer la signature.')};im.src=url}
+$('#sgb').onclick=()=>{sx.clearRect(0,0,600,240);$('#sgu').hidden=!sgGet();$('#sg').hidden=false};
+sgc.onpointerdown=e=>{sdw=true;sgc.setPointerCapture(e.pointerId);sx.lineWidth=4;sx.lineCap='round';sx.lineJoin='round';sx.strokeStyle='#111';const p=sp(e);sx.beginPath();sx.moveTo(p.x,p.y);sx.lineTo(p.x+.1,p.y);sx.stroke()};
+sgc.onpointermove=e=>{if(!sdw)return;const p=sp(e);sx.lineTo(p.x,p.y);sx.stroke()};
+sgc.onpointerup=sgc.onpointercancel=()=>{sdw=false};
+$('#sgx').onclick=()=>sx.clearRect(0,0,600,240);
+$('#sgn').onclick=()=>$('#sg').hidden=true;
+$('#sgu').onclick=()=>useSig(sgGet());
+$('#sgs').onclick=()=>{
+ const d=sx.getImageData(0,0,600,240),W=600;let x0=W,y0=240,x1=0,y1=0;
+ for(let y=0;y<240;y++)for(let x=0;x<W;x++)if(d.data[(y*W+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}
+ if(x1<x0)return toast('Dessinez d’abord votre signature.');
+ const c=document.createElement('canvas');c.width=x1-x0+8;c.height=y1-y0+8;c.getContext('2d').putImageData(d,4-x0,4-y0);
+ const url=c.toDataURL('image/png');try{localStorage.setItem('sig',url)}catch(e){}useSig(url)};
 $('#undo').onclick=()=>{const a=ann.pop();if(a&&a.g)ann=ann.filter(z=>{if(z.g===a.g){if(z.o)z.o.done=false;return false}return true});sel=null;drawAll()};
 $('#zi').onclick=()=>{zoom=Math.min(zoom*1.25,4);bytes&&load()};
 $('#zo').onclick=()=>{zoom=Math.max(zoom/1.25,.5);bytes&&load()};
@@ -267,6 +297,7 @@ addEventListener('keydown',e=>{if(e.key==='Delete'&&sel&&document.activeElement.
 $('#save').onclick=async()=>{
  try{
   const out=await bake(),dl=window.claude?await claude.use('downloads'):null;
+  if(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()&&Capacitor.Plugins.Filesystem){let b='';for(let k=0;k<out.length;k+=8192)b+=String.fromCharCode.apply(null,out.subarray(k,k+8192));const nm=fname.replace(/\.pdf$/i,'')+'-modifié.pdf',f=await Capacitor.Plugins.Filesystem.writeFile({path:nm,data:btoa(b),directory:'CACHE'});await Capacitor.Plugins.Share.share({title:nm,url:f.uri});return}
   if(!dl){const u=URL.createObjectURL(new Blob([out],{type:'application/pdf'})),a=document.createElement('a');a.href=u;a.download=fname.replace(/\.pdf$/i,'')+'-modifié.pdf';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);return}
   await dl.save({filename:fname.replace(/\.pdf$/i,'')+'-modifié.pdf',data:new Blob([out],{type:'application/pdf'})});
  }catch(e){if(!e||e.code!=='declined')toast('Échec de l’enregistrement.')}
