@@ -47,6 +47,7 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
  </div>
  <div class="row" id="tools">
   <button class="b on" data-t="select">Sélection</button>
+  <button class="b" id="ocr">Lire le texte (OCR)</button>
   <button class="b" data-t="edit">Modifier le texte</button>
   <button class="b" data-t="zone">Remplacer une zone</button>
   <button class="b" data-t="text">Texte</button>
@@ -79,11 +80,12 @@ body[data-tool=zone] svg,body[data-tool=pen] svg,body[data-tool=hl] svg,body[dat
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
 const NS='http://www.w3.org/2000/svg',$=s=>document.querySelector(s);
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const {PDFDocument,StandardFonts,rgb,degrees}=PDFLib;
-let bytes=null,pdf=null,zoom=1,tool='select',color='#e11d48',size=16,ann=[],uid=0,sel=null,fname='document.pdf',sizes=[],ovs=[],cur=0,tok=0,pend=null,tx=[];
+let bytes=null,pdf=null,zoom=1,tool='select',color='#e11d48',size=16,ann=[],uid=0,sel=null,fname='document.pdf',sizes=[],ovs=[],cur=0,tok=0,pend=null,tx=[],ocrC={},ocrW=null;
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('s');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('s'),2600)}
 function hex(h){const n=parseInt(h.slice(1),16);return rgb((n>>16&255)/255,(n>>8&255)/255,(n&255)/255)}
@@ -186,7 +188,7 @@ async function load(){
   const w=document.createElement('div');w.className='pg';w.style.width=v.width*sc+'px';w.style.height=v.height*sc+'px';
   const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
   const o=document.createElementNS(NS,'svg');o.setAttribute('viewBox',`0 0 ${v.width} ${v.height}`);
-  tx[i]=await runs(pg,v);w.append(c,o);host.append(w);sizes[i]={w:v.width,h:v.height};ovs[i]=o;bind(o,i);draw(i);
+  tx[i]=await runs(pg,v);if(!tx[i].length&&ocrC[i])tx[i]=ocrC[i];w.append(c,o);host.append(w);sizes[i]={w:v.width,h:v.height};ovs[i]=o;bind(o,i);draw(i);
   await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
  }
  drawAll();scrolled();
@@ -209,7 +211,7 @@ async function bake(){
 }
 async function pageOp(fn){
  if(!bytes)return;
- try{const doc=await PDFDocument.load(await bake(),{ignoreEncryption:true});await fn(doc);bytes=await doc.save();ann=[];sel=null;const keep=cur;await load();ovs[keep]&&document.querySelectorAll('.pg')[keep]?.scrollIntoView()}
+ try{const doc=await PDFDocument.load(await bake(),{ignoreEncryption:true});await fn(doc);bytes=await doc.save();ann=[];ocrC={};sel=null;const keep=cur;await load();ovs[keep]&&document.querySelectorAll('.pg')[keep]?.scrollIntoView()}
  catch(e){toast('Opération impossible sur ce document.')}
 }
 const ops={
@@ -224,16 +226,36 @@ document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{
  tool=b.dataset.t;document.body.dataset.tool=tool;
  document.querySelectorAll('[data-t]').forEach(x=>x.classList.toggle('on',x===b));
  if(tool==='img'){pend=null;$('#f3').click()}sel=null;drawAll();
+ if(tool==='edit'&&bytes&&!(tx[cur]||[]).length)toast('Aucun texte lisible ici : appuie d’abord sur « Lire le texte (OCR) ».');
 });
 $('#col').oninput=e=>{color=e.target.value;const a=ann.find(x=>x.id===sel);if(a&&a.t!=='white'){a.color=color;drawAll()}};
 $('#sz').onchange=e=>size=+e.target.value;
 $('#open').onclick=$('#open2').onclick=()=>$('#f1').click();
-$('#f1').onchange=async e=>{const f=e.target.files[0];if(!f)return;fname=f.name;bytes=await readFile(f);ann=[];sel=null;zoom=1;await load();e.target.value=''};
+$('#f1').onchange=async e=>{const f=e.target.files[0];if(!f)return;fname=f.name;bytes=await readFile(f);ann=[];ocrC={};sel=null;zoom=1;await load();e.target.value=''};
 $('#f2').onchange=async e=>{const f=e.target.files[0];if(!f)return;const ob=await readFile(f);e.target.value='';
  await pageOp(async d=>{const o=await PDFDocument.load(ob,{ignoreEncryption:true});(await d.copyPages(o,o.getPageIndices())).forEach(p=>d.addPage(p))});toast('PDF fusionné à la fin.')};
 $('#f3').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image(),u=URL.createObjectURL(f);
  im.onload=()=>{const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;c.getContext('2d').drawImage(im,0,0);pend={url:c.toDataURL('image/png'),w:im.naturalWidth,h:im.naturalHeight};URL.revokeObjectURL(u);toast('Touchez la page pour placer l’image.')};
  im.src=u;e.target.value=''};
+$('#ocr').onclick=async()=>{
+ if(!pdf)return toast('Ouvrez d’abord un PDF.');
+ if(typeof Tesseract==='undefined')return toast('OCR indisponible : connexion internet requise.');
+ const i=cur,b=$('#ocr');b.disabled=true;toast('Lecture de la page '+(i+1)+'… jusqu’à 30 s la première fois.');
+ try{
+  const pg=await pdf.getPage(i+1),vp=pg.getViewport({scale:2200/pg.getViewport({scale:1}).width});
+  const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
+  await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+  ocrW=ocrW||await Tesseract.createWorker('fra');
+  const {data}=await ocrW.recognize(c),k=sizes[i].w/c.width,r=[];
+  const add=(w,bl,sz)=>{if(!w.text.trim()||w.confidence<40)return;r.push({str:w.text,x:w.bbox.x0*k,b:bl,s:sz,w:(w.bbox.x1-w.bbox.x0)*k})};
+  if(data.lines&&data.lines.length)for(const l of data.lines){const sz=(l.bbox.y1-l.bbox.y0)*k*.9;for(const w of l.words||[])add(w,l.bbox.y1*k-sz*.2,sz)}
+  else for(const w of data.words||[]){const sz=(w.bbox.y1-w.bbox.y0)*k*.9;add(w,w.bbox.y1*k-sz*.2,sz)}
+  ocrC[i]=tx[i]=r;
+  toast(r.length?r.length+' mots trouvés. Touchez un mot pour le modifier.':'Aucun texte reconnu sur cette page.');
+  document.querySelector('[data-t=edit]').click();
+ }catch(e){toast('Échec de la lecture (connexion ?).')}
+ b.disabled=false;
+};
 $('#undo').onclick=()=>{const a=ann.pop();if(a&&a.g)ann=ann.filter(z=>{if(z.g===a.g){if(z.o)z.o.done=false;return false}return true});sel=null;drawAll()};
 $('#zi').onclick=()=>{zoom=Math.min(zoom*1.25,4);bytes&&load()};
 $('#zo').onclick=()=>{zoom=Math.max(zoom/1.25,.5);bytes&&load()};
